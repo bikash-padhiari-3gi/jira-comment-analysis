@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Combined SAM Template for Lambda function and API Gateway
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 256
+Resources:
+  MyLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: comment_analysis.lambda_handler
+      Runtime: python3.12
+      FunctionName: jira-analysis
+      Description: My Lambda function
+      CodeUri: .
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref JiraAnalysisTopic
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: comprehend:DetectSentiment
+              Resource: "*"
+        - Statement:
+            - Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref JiraAnalysisTopic
+    Metadata:
+      SamResourceId: MyLambdaFunction
+      Dependencies:
+        - requests
+  JiraAnalysisTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Jira Analysis Topic
+      TopicName: jira-analysis-topic
+  MyApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      DefinitionBody:
+        swagger: '2.0'
+        info:
+          title: API Gateway for Jira Analysis
+          version: '1.0'
+        paths:
+          /jira-analysis:
+            post:
+              x-amazon-apigateway-integration:
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MyLambdaFunction.Arn}/invocations
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+    Metadata:
+      SamResourceId: MyApiGateway
+  MyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/jira-analysis
+    Metadata:
+      SamResourceId: MyLogGroup
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt MyLambdaFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MyApiGateway}.ApiRootResourceId/*/*/jira-analysis"
