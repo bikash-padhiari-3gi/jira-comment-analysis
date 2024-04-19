@@ -28,17 +28,16 @@ def lambda_handler(event, context):
     print(comment)
     comment_text = comment['body']
   
-    if project_key!="KAN":
-        sentiment = detect_sentiment(comment_text)
-        print("SENTIMENT : ", sentiment)
     
-        message = f'Negative Comment\n Project: {project_key}\n Issue : {issue_key} \n Comment : {comment_text}\n Assignee : {assignee_display_name}\n Reporter : {reporter_display_name}\n '
-        if sentiment == 'NEGATIVE':
-            response = sns.publish(
-                TopicArn=topic_arn,
-                Message=message
-            )
-
+    sentiment = detect_sentiment(comment_text)
+    print("SENTIMENT : ", sentiment)    
+    message = f'Negative Comment\n Project: {project_key}\n Issue : {issue_key} \n Comment : {comment_text}\n Assignee : {assignee_display_name}\n Reporter : {reporter_display_name}\n '
+    if sentiment == 'NEGATIVE':
+        response = sns.publish(
+        TopicArn=topic_arn,
+        Message=message
+        )
+        
     return {
         'statusCode': 200,
         'body': json.dumps({'status': 'received'})
