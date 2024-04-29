@@ -67,4 +67,4 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt MyLambdaFunction.Arn
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MyApiGateway}.ApiRootResourceId/*/*/jira-analysis"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MyApiGateway}/*/*/jira-analysis"
