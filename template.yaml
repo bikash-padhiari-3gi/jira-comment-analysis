@@ -26,6 +26,18 @@ Resources:
             - Effect: Allow
               Action: sns:Publish
               Resource: !Ref JiraAnalysisTopic
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:ListFoundationModels
+              Resource: "*"
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:GetFoundationModel
+              Resource: "*"
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: "*"
     Metadata:
       SamResourceId: MyLambdaFunction
       Dependencies:

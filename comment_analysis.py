@@ -1,84 +1,122 @@
 import json
 import boto3
 import os
+import re
 # import requests
 
-region_name = 'ap-south-1'
+region_name = 'eu-central-1'
 
 comprehend = boto3.client(service_name='comprehend', region_name=region_name)
+bedrock = boto3.client('bedrock-runtime', region_name=region_name)
 sns = boto3.client('sns')
 topic_arn = os.environ.get('SNS_TOPIC_ARN')
-chunk=5000
-# topic_arn = 'arn:aws:sns:ap-south-1:590183768298:jira-analysis-topic'
 
 def lambda_handler(event, context):
     body = json.loads(event['body'])    
     project_key = body['issue']['fields']['project']['key']
     issue_key = body['issue']['key']
     reporter_display_name = body['issue']['fields']['reporter']['displayName']
-
     if body['issue']['fields']['assignee'] is not None:
         assignee_display_name = body['issue']['fields']['assignee']['displayName']
     else:
         assignee_display_name = "Unassigned"
 
     comment_key= body['comment']['id']
-    comment = body['comment']    
+    comment = body['comment']
+    attachments = body['issue']['fields']['attachment']
+    attachment_filename = body['issue']['fields']['attachment'][0]['filename']
+    
+    # Extract filenames
+    filenames = [item['filename'] for item in body['issue']['fields']['attachment']]   
     text = comment['body'] #this is what we need to send into coprehend
-    text_size=len(text)
     
-    if text_size <= 4000:
-        # If text is smaller than or equal to 5000 bytes, use detect_sentiment
-        response = comprehend.detect_sentiment(Text=text, LanguageCode='en')
-        sentiment = response['Sentiment']
-        sentiment_scores = response['SentimentScore']
-        print("Sentiment:", sentiment)
-        
+    # Clean the text (If the comment is an attachment it helps to compare with the filename from attachment)
+    cleaned_text = re.sub(r'[\[\]^!]+', '', text)
+    
+    # Check if any filename exists in the cleaned text
+    found = False
+    for filename in filenames:
+        if filename in cleaned_text:
+            found = True
+            break
+
+    if found:
+        print("At least one filename exists in the comment text.")
+        print("Before removing filename Text=  ", text)
+        # Remove the filename from the text
+        text = text.replace(filename, '')
+        print("After removing filename Text=  ", text)
     else:
-        # If text is larger than 5000 bytes, split it into smaller chunks and use batch_detect_sentiment
-        text_chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-        response = comprehend.batch_detect_sentiment(TextList=text_chunks, LanguageCode='en')
-        
-            
-        # aggregating sentiment scores to then take average
-        positive = 0
-        negative = 0
-        neutral = 0
-        mixed = 0
-        divider = 0
-    
-        for item in response['ResultList']:
-            positive += item['SentimentScore']['Positive']
-            negative += item['SentimentScore']['Negative']
-            neutral += item['SentimentScore']['Neutral']
-            mixed += item['SentimentScore']['Mixed']
-            divider += 1
-            
-        positive /=  divider
-        negative /= divider
-        neutral /= divider
-        mixed /= divider
-        
-        values = {'positive':positive, 'negative':negative, 'neutral':neutral, 'mixed':mixed}
-        
-        score = max(values.values())
-        sentiment = max(values, key=values.get)
-    
-        print(score)
-        print(f'Maximum sentiment is {sentiment} with a score of {score}')
-    print("SENTIMENT : ", sentiment)    
-    message = f'Negative Comment\n Project: {project_key}\n Issue : {issue_key} \n Comment : {text}\n Assignee : {assignee_display_name}\n Reporter : {reporter_display_name}\n '
-    if sentiment == 'NEGATIVE' or 'negative':
+        print("Comment and attachment filenames are not equal.")
+
+        # -------------newly added--------------------------------------------
+    print("END OF COMMENT --------------------------------------------------------------------------------------------------------------")
+    text_size=len(text)
+    print("TEXT SIZE : ",text_size)
+    # -------------------------Enclosed code works properly----------------------------------------------------------------------
+    try:
+        bedrock_response = bedrock_invoke(text)
+        print("RESPONSE:", bedrock_response)
+        # completion_text = json.loads(bedrock_response)['completion']
+        completion_text = bedrock_response['completion']
+        print("Text sent to comprehend ---\n",completion_text)
+        comprehend_response = comprehend.detect_sentiment(Text=completion_text, LanguageCode='en')
+        sentiment = comprehend_response['Sentiment']
+        print("Sentiment:", sentiment)
+        # return sentiment
+    except Exception as e:
+        print("EXCEPTION insode ELSE : ", e)
+    message = f'{sentiment} Comment\n Project: {project_key}\n Issue : {issue_key} \n Comment : {completion_text}\n Assignee : {assignee_display_name}\n Reporter : {reporter_display_name}\n '
+    print("Sentiment:", sentiment)
+    # if sentiment == 'NEGATIVE' or 'negative':
+    if sentiment.upper() == 'NEGATIVE':
+        print("Sending")
+        print(sentiment)
         response = sns.publish(
         TopicArn=topic_arn,
         Message=message
         )
-        
     return {
         'statusCode': 200,
         'body': json.dumps({'status': 'received'})
     }
 
-def detect_sentiment(text):
-    response = comprehend.detect_sentiment(Text=text, LanguageCode='en')
-    return response['Sentiment']
+
+def bedrock_invoke (input_chunk):
+    modelId = 'anthropic.claude-v2'
+    accept = 'application/json'
+    content_type = 'application/json'
+    # prompt="""Human:'You are a text analysis expert.\nAs an expert your job is to take large chunks of text and extract the relevant or important information.\nHere is an example of the chunk you will be given:\n{{\'body\': "{color:#172B4D}Morning,{color}{color:#172B4D}{color} \\n \\n{color:#172B4D} I am so sorry I thought I replied to the message but I must not have hit send. It is resolved now! Thank you so much{color} \\n| \\n| \\n|\\n!image726011.png|thumbnail! | \\n| \\n| \\n| \\n| {color:#000001} {color} \\n|{color:#000001} Lauren De Mello{color}{color:#FFFFFF}{color}{color:#000001}{color}{color:#000001} {color}| {color:#000001}{color} {color:#000001} {color} \\n|{color:#000001} Recruitment Consultant{color}{color:#000001} {color}| {color:#000001}{color} {color:#000001}{color}{color:#000001}London{color}{color:#000001} {color} \\n| \\n| \\n| \\n|\\n!image814301.png|thumbnail! | {color:#000001} {color} \\n|{color:#000001} {color}{color:#000001}{color}{color:#000001}+44 20 3854 4794 tel:+44%2020%203854%204794{color}{color:#000001}{color}{color:#000001} {color}| {color:#000001}{color} {color:#000001} {color} \\n|{color:#000001} {color}{color:#000001} \\n{color} \\n|{color:#000001}{color}{color:#000001}\\n{color}!image783287.png|thumbnail!{color:#000001} <[https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fwww.harnham.com%2F&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809505417%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=LqFz8FFyDtGu8q6wOuNlSLN1nvA%2BTqX62DiTvKIRiRw%3D&reserved=0]>{color}{color:#000001} {color}| {color:#000001} {color}{color:#000001} {color}{color:#000001}\\nVisit Our Website {color}{color:#000001} \\n{color} {color:#000001}{color} \\n|\\n!image747489.png|thumbnail! <[https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fbit.ly%2FUKDataAISalarySurvey2024&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809520831%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=p6d4w8f0oLzVKbW%2BBFbYP6Pj2LqU7%2FvA1pyR6F9e2qA%3D&reserved=0]> | \\n| {color:#000001} {color} \\n|{color:#000001} Privacy Notice: \\\\\\\\ \\\\\\\\ As the world\'s leading Data & AI recruitment company we take your data privacy very seriously. View our {color}[{color:#000001}{color}{color:#000001}Privacy Notice here{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fwww.harnham.com%2Fprivacy-notice&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809533999%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=d0LKpzCb2EgxU3jnPzJpid3YCiW8dJvC%2BxD4qNhYPUE%3D&reserved=0]{color:#000001}{color}{color:#000001}. \\\\\\\\ \\\\\\\\ Disclaimer: \\\\\\\\ \\\\\\\\ This e mail and any files transmitted with it are confidential (and may contain privileged information) to the ordinary user of the e mail address to which it was addressed and must not be copied, \\\\\\\\ disclosed or distributed without the prior authorisation of the sender. Please notify the sender and destroy this e mail immediately if you are not the intended recipient. \\\\\\\\ Please also note that while our own software systems have been used to try to ensure that this email has been swept for viruses, we do not accept responsibility for any damage \\\\\\\\ or loss caused in respect of any viruses transmitted by the e mail. Please ensure your own checks are carried out before any attachments are opened. \\\\\\\\ \\\\\\\\ Terms & Conditions: \\\\\\\\ \\\\\\\\ Where Harnham introduces any candidate for an assignment or employment (either by e mail, phone, mail or directly) then the introductions shall be subject to our Standard Terms of Business, \\\\\\\\ or if applicable terms which have been agreed specifically with your company for the provision of these services. A copy of the Standard Terms of Business applicable will be attached to this \\\\\\\\ email or made available on request. \\\\\\\\ \\\\\\\\ Harnham Search and Selection is a limited company registered in England and Wales. Company registration number: 05723485. \\\\\\\\ Registered office: 3rd Floor, Melbury House, 51 Wimbledon Hill Road, Wimbledon, SW19 7QW. \\\\\\\\ {color}{color:#000001} {color}| {color:#000001}{color} \\n----\\n \\n {color:#172B4D}*From:* Babar Asmatullah jira@3gitechnology.atlassian.net\\n *Sent:* Thursday, April 25, 2024 8:44 AM\\n *To:* Lauren De Mello laurendemello@harnham.com\\n *Subject:* HSD-2829 Teams Not Loading{color} \\n \\n{color:#333333}{color}{color:#999999}—-—-—-—{color} {color:#333333} \\n{color}{color:#999999}Reply above this line.{color} {color:#333333} \\n \\n\\nHi Lauren, \\n\\nI have tried reaching out to see if this has been solved for you. \\n\\nI haven’t got any response from you yet so I will be closing out this ticket. \\n\\nPlease reply to this email if this is still an issue. \\n\\nKind regards, \\n\\nBabar \\n{color}\\n----\\n{color:#333333} \\n\\n \\n\\nresolved this as Done. \\n \\n How was our service for this request? \\n{color}{color:#333333} \\n{color} \\n|{color:#333333} {color}[{color:#333333}{color}{color:#666666}☆{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtg%253A%252F3tslcitgnooehsty.aasialeen.v%252Fsrnt%252Fdicuskceepmstrr%252FooeS%252Fta-%252FHDl5e928bfed2%252Fe%253Fac%253Doknktd4cd72863ddd773a0e8435b95db540862ff6e6a71%253Dgnitar%2526%26s%3DG4EEwNomSt8x2F1hmclTwnarr4w&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809545128%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=2k5%2FWVtv9aRWfNsZskp%2BdhnJscXSFGhCWQbmzqE%2FiQw%3D&reserved=0]{color:#666666}{color}{color:#333333} \\nVery poor {color}{color:#333333} {color}|{color:#333333} {color}[{color:#333333}{color}{color:#666666}☆{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtg%253A%252F3tslcitgnooehsty.aasialeen.v%252Fsrnt%252Fdicuskceepmstrr%252FooeS%252Fta-%252FHDl5e928bfed2%252Fe%253Fac%253Doknktd4cd72863ddd773a0e8435b95db540862ff6e6a72%253Dgnitar%2526%26s%3D77tHOR7DuW0lZZWmCA9CmLb8YwY&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809558517%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=McnG5J%2F9rAWYlQrozMOehCBi4%2BGrDHoyNq%2BqQl%2Fs1rE%3D&reserved=0]{color:#666666}{color}{color:#333333} Poor {color}{color:#333333} {color}|{color:#333333} {color}[{color:#333333}{color}{color:#666666}☆{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtg%253A%252F3tslcitgnooehsty.aasialeen.v%252Fsrnt%252Fdicuskceepmstrr%252FooeS%252Fta-%252FHDl5e928bfed2%252Fe%253Fac%253Doknktd4cd72863ddd773a0e8435b95db540862ff6e6a73%253Dgnitar%2526%26s%3D1-CKWJCUYVQ3FpxjZU-0qRjPTvw&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809570696%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=u%2Fno3EdWQs%2BI%2BTror1YOjadEhYx4fkTb6oCwZiCfX4w%3D&reserved=0]{color:#666666}{color}{color:#333333} Average {color}{color:#333333} {color}|{color:#333333} {color}[{color:#333333}{color}{color:#666666}☆{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtg%253A%252F3tslcitgnooehsty.aasialeen.v%252Fsrnt%252Fdicuskceepmstrr%252FooeS%252Fta-%252FHDl5e928bfed2%252Fe%253Fac%253Doknktd4cd72863ddd773a0e8435b95db540862ff6e6a74%253Dgnitar%2526%26s%3DMIu2I6IoJpPnZnQM91bL2-xJ9qM&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809583601%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=Yn55WKzVCsp5nfkSoWLmj4tPycGYHrugRdJn4XfG%2Bi0%3D&reserved=0]{color:#666666}{color}{color:#333333} Good {color}{color:#333333} {color}|{color:#333333} {color}[{color:#333333}{color}{color:#666666}☆{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtg%253A%252F3tslcitgnooehsty.aasialeen.v%252Fsrnt%252Fdicuskceepmstrr%252FooeS%252Fta-%252FHDl5e928bfed2%252Fe%253Fac%253Doknktd4cd72863ddd773a0e8435b95db540862ff6e6a75%253Dgnitar%2526%26s%3DAc3-TOrDZSJXlxEJUVqhrPbUC7w&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809595802%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=8ZcA0GUM%2BnVaE8rRDyyFdxdWf0kg0wOwZIGn2xbWJXc%3D&reserved=0]{color:#666666}{color}{color:#333333} Very good {color}{color:#333333} {color}| \\n{color:#333333}{color}\\n \\n \\n \\n\\n[{color:#333333}{color}{color:#3572b0}View request{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtg%253A%252F3tslcitgnooehsty.aasialeen.v%252Fsrnt%252Fdicuskceepmstrr%252FooeS%252Fta-%252FHDl5k928ntoe2%253FAJ%253DeOeXiy0LViJJQiCK1JchbUOiIGi.NzIyJ9e1ii3J0hiOJZQvubmXW1d9eyGMtsuaIbl6zInjCIIFazDZh3wMMOQ53MTGjQOcYDzI03mMkMVjwZWzWJMUMjGFlkyZBOQyjMTDGEMlMjWNl14MYNU42NmjWINMNCjNmpiLJZIzic3XiJZMOGWJ2zlZVaNtqayG3Qd1dXW9rztaNZ4iydW2iwYVICG9u64dIdVy1eyj2VIJcTToiizNYMQ1pLCS3NZJcCkI6yTR0Ihs5ODmn0IIITCV4x6MccI51NjyDIMQMjWwix0IoaFx0NzDDMMEMTQkziTSyf.52J2rWx_u3xgoiskhtzSQHHL0n_BVhAr0BsKk%2526prcsda%253Dure_oainoiicttfliame-no%26s%3D6qujQdHbMuP1u2OMoLj6_MsAbss&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809605785%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=ZUB9JP7ji7NXaFmkUXF5nAL6qa3KwU0SUu2Twbr3Eeg%3D&reserved=0]{color:#3572b0}{color}{color:#333333} ·{color} [{color:#333333} {color}{color:#3572b0}Turn off this request\'s notifications{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtg%253A%252F3tslcitgnooehsty.aasialeen.v%252Fsrnt%252Fdicuskceepmstrr%252FooeS%252Fta-%252FHDl5s928bunu2%252Fjiscte%253FwrbAJ%253DeOeXiy0LViJJQiCK1JchbUOiIGi.NzIyJ9e1ii3J0hiOJZQvubmXW1d9eyGMtsuaIbl6zInmCIIFajGNmm5ZNMMm0YzTzRZYYmWQ2zmMQZRyyMzmGIYcZzDEzxhYYMV53MWGGYOYMTTFi0zMINY1lYzjTEZlNCTE0piLJYYzic3XiJZMOGWJ2zlZVaNtqayG3Qd1dXW9rztaNZ4iydW2iwYVICG9u64dIdVy1eyj2VIJcDzoiwyMINEilOjDjNNBNmTEyt2ZILg44NGjS0YENWTc53jZULhxjMTiGQNdM3mIslzcVIlEiIjTFNLoSSjI4iifwMkxwZXzjoNhIjDE2zwMkNUipLCjXQOJYzTE3wwMEMQg9OTP30tN.yiSE9k5LL9R7zs0MOHx5Yfk8JQKRhSgCnOaZaO%26s%3DOtrZCUTlbpoYqLpXXwEYAoV2k_Y&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809614523%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=35CiPk0G7QrguBm8HWZRMhIdgcVwu0zu5uSbls%2BgJGg%3D&reserved=0]{color:#3572b0}{color}{color:#333333} \\n\\n{color}{color:#707070}This is shared with LaurenDeMello.{color}{color:#333333}{color} \\n\\n[{color:#333333}{color}{color:#707070}Powered by Jira Service Management{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Furl6.mailanyone.net%2Fscanner%3Fm%3D1rztnA-0002aE-3t%26d%3D4%257Cmail%252F90%252F1714030800%252F1rztnA-0002aE-3t%257Cin6l%257C57e1b682%257C9862810%257C9895322%257C662A0A0CC5C60936B58E729AA7AE8FDB%26o%3D%252Fphtw%253A%252Fwtsstw.aasialoon.t%252Fsfcmrewa%252Fjiar%252F-vseecedrirpskdwee%252Fo_%253F-betmmyurmdi-jiau%253Dupintodc-rum%2526ucsort_sie%253Dra_ejrsevi_dekc_oiemt_foalcuernm_o%2526tittee3gtn%253Dygolonhc%26s%3DsJBkgJceZUzQEwyMr3lmgZLFv8U&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809622269%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=JlK3eyirnCzr6jN1NKZlpJMbQlgPTIdGxK2Gwm4iMUQ%3D&reserved=0]{color:#707070}{color}{color:#333333} \\n Sent on April 25, 2024 8:44:53 AM BST \\n{color}\\n----\\n{color:#333333} \\n\\nThis email has been scanned for spam & viruses. If you believe this email should have been stopped by our filters,{color} [{color:#333333} click here{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fportal-uk.mailanyone.net%2Findex.html%23%2Fouter%2Freportspam%3Ftoken%3DdXNlcj1sYXVyZW5kZW1lbGxvQGhhcm5oYW0uY29tO3RzPTE3MTQwMzExMTY7dXVpZD02NjJBMEEwQ0M1QzYwOTM2QjU4RTcyOUFBN0FFOEZEQjt0b2tlbj04N2MxYWZiZTRkNzk2NWU4NjMzM2QyOTBkMzc5ZWIyY2YzZDYxNTM1Ow%253D%253D&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809629268%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=t06NBPO2cc6YsgGT6qBJUsa14VbcXF6G0z1NWUrQzF8%3D&reserved=0]{color:#333333} to report it.{color} \\n\\n {color:#172B4D}*[EXTERNAL EMAIL]*{color} {color:#172B4D} DO NOT CLICK links or attachments unless you recognize the sender and know the content is safe.{color}"}}'+
+
+    #     ""\nFrom this chunk, the following text would be extracted:\n I am so sorry I thought I replied to the message but I must not have hit send. It is resolved now!\n Now extract the needed information from this following piece of text chunk:\n""" + f"{input_chunk},\nAssistant:"
+    # prompt="""Human:'You are a text analysis expert.\nAs an expert your job is to take large chunks of text and extract the relevant or important information.\nHere is an example of the chunk you will be given:\n{{\'body\': "{color:#172B4D}Morning,{color}{color:#172B4D}{color} \\n \\n{color:#172B4D} I am so sorry I thought I replied to the message but I must not have hit send. It is resolved now! Thank you so much{color} \\n| \\n| \\n|\\n!image726011.png|thumbnail! | \\n| \\n| \\n| \\n| {color:#000001} {color} \\n|{color:#000001} Lauren De Mello{color}{color:#FFFFFF}{color}{color:#000001}{color}{color:#000001} {color}| {color:#000001}{color} {color:#000001} {color} \\n|{color:#000001} Recruitment Consultant{color}{color:#000001} {color}| {color:#000001}{color} {color:#000001}{color}{color:#000001}London{color}{color:#000001} {color} \\n| \\n| \\n| \\n|\\n!image814301.png|thumbnail! | {color:#000001} {color} \\n|{color:#000001} {color}{color:#000001}{color}{color:#000001}+44 20 3854 4794 tel:+44%2020%203854%204794{color}{color:#000001}{color}{color:#000001} {color}| {color:#000001}{color} {color:#000001} {color} \\n|{color:#000001} {color}{color:#000001} \\n{color} \\n|{color:#000001}{color}{color:#000001}\\n{color}!image783287.png|thumbnail!{color:#000001} <[https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fwww.harnham.com%2F&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809505417%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=LqFz8FFyDtGu8q6wOuNlSLN1nvA%2BTqX62DiTvKIRiRw%3D&reserved=0]>{color}{color:#000001} {color}| {color:#000001} {color}{color:#000001} {color}{color:#000001}\\nVisit Our Website {color}{color:#000001} \\n{color} {color:#000001}{color} \\n|\\n!image747489.png|thumbnail! <[https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fbit.ly%2FUKDataAISalarySurvey2024&data=05%7C02%7Charnhamhelpdesk%403gi.co.uk%7C072b953a30bb4546981608dc64fbc8e8%7C7b44b937f68a4be881ba7a3f6d016040%7C0%7C0%7C638496279809520831%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C0%7C%7C%7C&sdata=p6d4w8f0oLzVKbW%2BBFbYP6Pj2LqU7%2FvA1pyR6F9e2qA%3D&reserved=0]> | \\n| {color:#000001} {color} \\n|{color:#000001} Privacy Notice: \\\\\\\\ \\\\\\\\ As the world\'s leading Data & AI recruitment company we take your data privacy very seriously. View our {color}[{color:#000001}{color}{color:#000001}Privacy Notice here{color}|https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fwww.harnham.com%2Fprivacy-notice&data=05%7C02%7Charnhamhelpdesk%403gi.c"""+ "\nFrom this chunk, the following text would be extracted:\n I am so sorry I thought I replied to the message but I must not have hit send. It is resolved now!\n Now extract the needed information and strictly analyze just the following piece of text :\n" + f"{input_chunk},\nAssistant:"
+    
+        # ,\n"max_tokens_to_sample":300,\n"temperature":0.5,\n"top_k":250,\n"top_p":1,\n"stop_sequences":["\n\nHuman:"],\n"anthropic_version":"bedrock-2023-05-31"""
+    # prompt= f"Human : You are an expert in text analysis. Your job is to analyze a piece of text and extract the relevant information. Strictly extract the text and no additional analyzation is necessary from this following text : \n{input_chunk} \nAssistant:"
+    # prompt = f"Human: As an expert in text analysis, your task is to extract relevant information from the provided text. If the input is an email, extract the text from its body while removing any links and formatting tags. If the input is a file name, simply return 'It is a file'. Extract the text strictly adhering to the following input:\n{input_chunk}\nAssistant:"
+    # prompt = f"Human: As an expert in text analysis, your task is to extract relevant information from the provided text. If the input has the structure similar to an email, extract the relevant text from it while removing any links and formatting tags. If the input is a file name, simply return 'It is a file' with no additional text or analysis. Extract the text strictly adhering to the following input, avoiding signatures and declarations:\n{input_chunk}\nAssistant:"
+    
+    #The following prompt works good with combination of files and text data. But sometimes it hallucinates when attachments are added other than screenshot or images, it generates random information
+    prompt = f"Human: As an expert in text analysis, your task is to extract relevant information from the provided text. . If the input has the structure similar to an email, extract the relevant text from it while removing any links,formatting tags, disclaimers, declarations and signatures.\nInstruction : Extract the text strictly adhering to the following input, avoiding any additional text, formatting tags, links, signatures, privacy notices, declarations, disclaimers and irrelevant information:\n{input_chunk}\nAssistant:"
+
+    print(prompt)
+    body = json.dumps({
+    "prompt": prompt,
+    "max_tokens_to_sample": 300,
+    "temperature": 0.5,
+    "top_k": 250,
+    "top_p": 1,
+    "stop_sequences": ["\n\nHuman:"],
+    "anthropic_version": "bedrock-2023-05-31"
+    })
+    
+    # Sending prompt to the model
+    response = bedrock.invoke_model(
+        modelId = modelId,
+        contentType = content_type,
+        accept = accept,
+        body = body
+        )
+    output=json.loads(response['body'].read())
+    return output
+    

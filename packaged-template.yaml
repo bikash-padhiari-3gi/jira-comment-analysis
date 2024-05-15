@@ -13,7 +13,7 @@ Resources:
       Runtime: python3.12
       FunctionName: jira-analysis
       Description: My Lambda function
-      CodeUri: s3://cf-templates-1mstfg24yqwhd-ap-south-1/9867f89f12c166af595f4d70fe42fa76
+      CodeUri: s3://cf-templates-1iyrlnsd3p1ek-eu-west-2/c206e60c7f9ac680ac37d8a99f1f8b9d
       Environment:
         Variables:
           SNS_TOPIC_ARN:
@@ -28,6 +28,18 @@ Resources:
           Action: sns:Publish
           Resource:
             Ref: JiraAnalysisTopic
+      - Statement:
+        - Effect: Allow
+          Action: bedrock:ListFoundationModels
+          Resource: '*'
+      - Statement:
+        - Effect: Allow
+          Action: bedrock:GetFoundationModel
+          Resource: '*'
+      - Statement:
+        - Effect: Allow
+          Action: bedrock:InvokeModel
+          Resource: '*'
     Metadata:
       SamResourceId: MyLambdaFunction
       Dependencies:
@@ -75,6 +87,6 @@ Resources:
         - Arn
       Principal: apigateway.amazonaws.com
       SourceArn:
-        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MyApiGateway}.ApiRootResourceId/*/*/jira-analysis
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MyApiGateway}/*/*/jira-analysis
     Metadata:
       SamResourceId: LambdaInvokePermission
