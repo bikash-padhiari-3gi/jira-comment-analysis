@@ -13,17 +13,12 @@ sns = boto3.client('sns')
 topic_arn = os.environ.get('SNS_TOPIC_ARN')
 email_substring = "An email has been sent for this issue:"
 
-# topic_arn = 'arn:aws:sns:ap-south-1:590183768298:jira-analysis-topic'
+
 
 def lambda_handler(event, context):
-    print("Event data type : ",type(event))
     print("Event  ----   ",event)
-    
     body = json.loads(event['body'])
     sentiment = None
-
-    
-#     print("BODY------------",body)
     
     project_key = body['issue']['fields']['project']['key']
     issue_key = body['issue']['key']
@@ -39,7 +34,6 @@ def lambda_handler(event, context):
     if body['issue']['fields']['attachment'] is not None:
         attachments = body['issue']['fields']['attachment']
         print("ATTACHMENT json  ", attachments)
-        #     # Assuming 'body' contains the JSON data received from an API
         attachment_filename = body['issue']['fields']['attachment'][0]['filename']
         
         # # Extract filenames
@@ -56,11 +50,10 @@ def lambda_handler(event, context):
     print("THIS IS THE ACTUAL COMMENT",text)
     # Condition checks if the comment is email
     if text.find(email_substring) == 0:
-        index_check = text.find(substring)
+        index_check = text.find(email_substring)
         print("substring index : ", index_check)
         index = text.find(issue_key)
         if index != -1:
-            print("+++++++")
             modified_text = text[index + 1 + len(issue_key):]
             print("Cleaned comment :")
             # send modified_text to comprehend
@@ -74,8 +67,6 @@ def lambda_handler(event, context):
     # If issue_key exists in the text, remove everything before it
     start_index = text.find("!")
     end_index = text.rfind("!")
-    # if start_index != -1 and end_index != -1:
-    # if len(text) >= 2 and text[0] == '!' and text[-1] == '!':
     if max_id_attachment['filename'] in text:
         print("Attachment found in comment.")
         
