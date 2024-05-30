@@ -13,7 +13,7 @@ sns = boto3.client('sns')
 topic_arn = os.environ.get('SNS_TOPIC_ARN')
 email_substring = "An email has been sent for this issue:"
 
-# topic_arn = 'arn:aws:sns:ap-south-1:590183768298:jira-analysis-topic'
+
 
 def lambda_handler(event, context):
     print("Event data type : ",type(event))
@@ -21,9 +21,6 @@ def lambda_handler(event, context):
     
     body = json.loads(event['body'])
     sentiment = None
-
-    
-#     print("BODY------------",body)
     
     project_key = body['issue']['fields']['project']['key']
     issue_key = body['issue']['key']
@@ -39,21 +36,21 @@ def lambda_handler(event, context):
     if body['issue']['fields']['attachment'] is not None:
         attachments = body['issue']['fields']['attachment']
         print("ATTACHMENT json  ", attachments)
-        #     # Assuming 'body' contains the JSON data received from an API
         attachment_filename = body['issue']['fields']['attachment'][0]['filename']
         
-        # # Extract filenames
+        # Extract filenames
         filenames = [item['filename'] for item in body['issue']['fields']['attachment']]
         max_id_attachment = max(attachments, key=lambda x: x['id'])
         print("-------------------------",max_id_attachment['filename'])
-        # # Print the filenames
+        # Print the filenames
         for filename in filenames:
             print(filename)
     
         print("ATTACHMENT : ", attachment_filename)
-    # print ("COMMENT :   ")
+    
     text = comment['body']
     print("THIS IS THE ACTUAL COMMENT",text)
+    
     # Condition checks if the comment is email
     if text.find(email_substring) == 0:
         index_check = text.find(email_substring)
@@ -67,6 +64,7 @@ def lambda_handler(event, context):
             print(modified_text)
             if len(modified_text)>2:
                 comprehend_response = comprehend.detect_sentiment(Text=modified_text, LanguageCode='en')
+                final_comment = modified_text
                 sentiment = comprehend_response['Sentiment']
         else:
             print("Issue key not found in text")
@@ -74,26 +72,25 @@ def lambda_handler(event, context):
     # If issue_key exists in the text, remove everything before it
     start_index = text.find("!")
     end_index = text.rfind("!")
-    # if start_index != -1 and end_index != -1:
-    # if len(text) >= 2 and text[0] == '!' and text[-1] == '!':
+
     if max_id_attachment['filename'] in text:
         print("Attachment found in comment.")
         
         # if start_index != -1 and end_index != -1:
         cleaned_comment = text[:start_index] + text[end_index+1:]
-        print("Cleaned Comment:")
-        print(cleaned_comment)
         print("length of cleaned comment", len(cleaned_comment))
         # send cleaned_comment to comprehend
         if len(cleaned_comment)>2:
                 comprehend_response = comprehend.detect_sentiment(Text=cleaned_comment, LanguageCode='en')
+                final_comment = cleaned_comment
                 sentiment = comprehend_response['Sentiment']
     else:
         print("Attachment not found in comment.")
         comprehend_response = comprehend.detect_sentiment(Text=text, LanguageCode='en')
+        final_comment = text
         sentiment = comprehend_response['Sentiment']
     if sentiment is not None:
-        message = f'{sentiment} Comment\n Project: {project_key}\n Issue : {issue_key} \n  Assignee : {assignee_display_name}\n Reporter : {reporter_display_name}\n '
+        message = f'{sentiment} Comment\n Project: {project_key}\n Issue : {issue_key} \n  Assignee : {assignee_display_name}\n Reporter : {reporter_display_name}\n Coment : {final_comment}\n '
         print("Sentiment:", sentiment)
         # if sentiment == 'NEGATIVE' or 'negative':
         if sentiment.upper() == 'NEGATIVE':
