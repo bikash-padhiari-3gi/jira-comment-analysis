@@ -3,45 +3,68 @@ Transform: AWS::Serverless-2016-10-31
 Description: Combined SAM Template for Lambda function and API Gateway
 Globals:
   Function:
-    Timeout: 10
+    Timeout: 30
     MemorySize: 256
 Resources:
   MyLambdaFunction:
-    Type: AWS::Serverless::Function
+    Type: AWS::Lambda::Function
     Properties:
       Handler: comment_analysis.lambda_handler
       Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
       FunctionName: jira-analysis
       Description: My Lambda function
-      CodeUri: .
+      Code:
+        S3Bucket: lambda-code-zipfile-bucket
+        S3Key: comment_analysis.zip
       Environment:
         Variables:
           SNS_TOPIC_ARN: !Ref JiraAnalysisTopic
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
       Policies:
-        - Statement:
+        - PolicyName: ComprehendPolicy
+          PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
             - Effect: Allow
               Action: comprehend:DetectSentiment
               Resource: "*"
-        - Statement:
+
+        - PolicyName: SNSNotificationPolicy
+          PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
             - Effect: Allow
               Action: sns:Publish
               Resource: !Ref JiraAnalysisTopic
-        - Statement:
+
+        - PolicyName: BedrockPolicy
+          PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
             - Effect: Allow
-              Action: bedrock:ListFoundationModels
-              Resource: "*"
-        - Statement:
-            - Effect: Allow
-              Action: bedrock:GetFoundationModel
-              Resource: "*"
-        - Statement:
-            - Effect: Allow
-              Action: bedrock:InvokeModel
+              Action: 
+                - bedrock:ListFoundationModels
+                - bedrock:GetFoundationModel
+                - bedrock:InvokeModel
               Resource: "*"
     Metadata:
       SamResourceId: MyLambdaFunction
       Dependencies:
         - requests
+
   JiraAnalysisTopic:
     Type: AWS::SNS::Topic
     Properties:

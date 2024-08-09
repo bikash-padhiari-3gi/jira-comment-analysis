@@ -195,8 +195,17 @@ def bedrock_invoke (text):
     modelId = 'amazon.titan-text-express-v1'
     accept = 'application/json'
     content_type = 'application/json'
+    prompt = (
+    "You are an expert in natural language processing with a focus on text extraction. "
+    "Your task is to extract the main content of the email while removing any non-essential information. "
+    "This includes removing signatures, disclaimers, sender and recipient names, dates, legal declarations, "
+    "and any warning messages. The input will be an entire email, and the output should only include the relevant "
+    "message content from the body of the email. Do not include any email addresses, metadata, or other irrelevant information. "
+    "Extract the content from the email data enclosed within the delimiters: ### "
+    f"### {text} ###")
     body = json.dumps({
-    "inputText":'As an expert in text analysis your task is to extract only the information from the provided string while removing sender name, recipient name, declaration or any signature data' + 'Strictly limit the response to extract the information from the email body data from the following email data enclosed within #' + f'#{text}#',
+    # "inputText":'As an expert in text analysis your task is to extract only the information from the provided string while removing sender name, recipient name, declaration or any signature data' + 'Strictly limit the response to extract the information from the email body data from the following email data enclosed within #' + f'#{text}#',
+    "inputText": prompt,
     "textGenerationConfig":
     {
         "maxTokenCount":512,
